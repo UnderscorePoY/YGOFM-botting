@@ -52,10 +52,15 @@ RESULT_MAX_STAT = 'result_max_stat'
 MEGAMORPH_ID = 657
 
 
-def HACK_BOARD_POS(board_pos):
-    # It's an involution, so the conversion works both ways.
-    return -board_pos - 1  # TODO should it be board_pos - 5 instead, to conserve left-to-right priority of the board ???
-    # TODO If so, this is not an involution anymore
+def encode_board_pos(pos):
+    return pos - 5
+
+def decode_board_pos(board_pos):
+    return board_pos + 5
+
+# def HACK_BOARD_POS(board_pos):
+#     # It's an involution, so the conversion works both ways.
+#     return -board_pos - 1
 
 
 def calculate_max_stat_ai(cur, card_id, field=None, equip_stage=0):
@@ -76,6 +81,7 @@ def calculate_true_max_stat_ai(cur, card_id, field, equip_stage):
 
 def find_best_combo_in_ai_hand(cur, hand, board_card=None, best_combo=None, max_fusion_length=5, field=None,
                                current_combo=None):
+    """ (Assumes board positions are already encoded.)"""
     # Max length reached
     if max_fusion_length == 0:
         return best_combo
@@ -90,7 +96,7 @@ def find_best_combo_in_ai_hand(cur, hand, board_card=None, best_combo=None, max_
         if board_card is not None:
             max_fusion_length -= 1
 
-            current_combo[ORDERING].append(HACK_BOARD_POS(board_pos))
+            current_combo[ORDERING].append(board_pos)
             current_combo[IDS].append(board_id)
             current_combo[RESULT_ID] = board_id
             current_combo[EQUIP_STAGE] = board_equip_level
@@ -200,7 +206,7 @@ def improve_monster_from_ai_hand(cur, hand, board_card, best_combo=None, max_imp
     # Base case
     if current_combo is None:
         current_combo = {
-            ORDERING: [HACK_BOARD_POS(board_pos)],
+            ORDERING: [board_pos],
             IDS: [board_id],
             RESULT_ID: board_id,
             EQUIP_STAGE: board_equip_level,
@@ -261,7 +267,7 @@ def improve_monster_from_ai_hand(cur, hand, board_card, best_combo=None, max_imp
 
 
 def improve_monster_from_ai_board_and_hand(cur, hand, monster_board=None, max_improve_length=4, field=None):
-    """Returns `None` if no improvement is found."""
+    """Returns a converted list of actions. Returns `None` if no improvement is found."""
     best_combo = None
 
     # Iterate from lowest *true* max stat to highest (earlier cards are looked at first in case of a tie).
@@ -280,7 +286,7 @@ def improve_monster_from_ai_board_and_hand(cur, hand, monster_board=None, max_im
                 best_combo = None
 
             if best_combo is not None:
-                return best_combo
+                return convert_best_combo(cur, best_combo)
 
     return None
 
@@ -325,27 +331,26 @@ traps_list_descending = [
 ]
 
 support_type_with_field = {
-    'Aqua' : ['Umi'],
-    'Beast' : ['Forest'],
-    'Beast-Warrior' : ['Sogen', 'Forest'],
-    'Dinosaur' : ['Wasteland'],
-    'Dragon' : ['Mountain'],
-    # 'Fairy' : [None],
-    'Fiend' : ['Yami'],
-    'Fish' : ['Umi'],
-    'Insect' : ['Forest'],
-    # 'Machine' : [None],
-    'Plant' : ['Forest'],
-    # 'Pyro' : [None],
-    # 'Reptile' : [None],
-    'Rock' : ['Wasteland'],
-    'Sea Serpent' : ['Umi'],
-    'Spellcaster' : ['Yami'],
-    'Thunder' : ['Mountain', 'Umi'],
-    'Warrior' : ['Sogen'],
-    'Winged Beast' : ['Mountain'],
-    'Zombie' : ['Wasteland']
-
+    'Aqua': ['Umi'],
+    'Beast': ['Forest'],
+    'Beast-Warrior': ['Sogen', 'Forest'],
+    'Dinosaur': ['Wasteland'],
+    'Dragon': ['Mountain'],
+    # 'Fairy': [None],
+    'Fiend': ['Yami'],
+    'Fish': ['Umi'],
+    'Insect': ['Forest'],
+    # 'Machine': [None],
+    'Plant': ['Forest'],
+    # 'Pyro': [None],
+    # 'Reptile': [None],
+    'Rock': ['Wasteland'],
+    'Sea Serpent': ['Umi'],
+    'Spellcaster': ['Yami'],
+    'Thunder': ['Mountain', 'Umi'],
+    'Warrior': ['Sogen'],
+    'Winged Beast': ['Mountain'],
+    'Zombie': ['Wasteland']
 }
 
 
@@ -426,16 +431,15 @@ def get_first_pos_of_type_in_hand(cur, hand, _type):
 
 
 def get_first_monster_compatible_on_board(cur, monster_board, equip_id):
-    """ Returns the position (converted to board notation) on the board of the first compatible monster with the given equip. Returns None if no monster is found. """
+    """ Returns the position on the board of the first compatible monster with the given equip. Returns None if no monster is found. """
 
-    for i, card_id in enumerate(monster_board):
+    for card_id in monster_board:
         if card_id is None:
             continue
         _tuple = cur.execute(
             f"SELECT * FROM 'Equipping' WHERE EquipID = '{equip_id}' AND EquippedID = '{card_id}'").fetchone()
         if _tuple is not None:
-            return HACK_BOARD_POS(
-                i)  # TODO is this correct ? 0 should be -5 to preserve order, 1 -> -4, 2 -> -3, 3 -> -2, 4 -> -1
+            return card_id['pos']
 
     return None
 
@@ -462,17 +466,17 @@ def ai_has_total_domination(cur, player_monsters, ai_monsters, field, look_faced
                                                                                     look_facedown_cards=True)
     player_true_max_stat_pos, _ = get_first_pos_of_true_max_stat_on_board(cur, player_monsters, field,
                                                                           look_facedown_cards=look_facedown_cards)
-    return calculate_max_stat_ai(cur, ai_monsters[ai_lowest_true_max_stat_pos], field=field) \
-           >= calculate_max_stat_ai(cur, player_monsters[player_true_max_stat_pos], field=field)
+    return calculate_max_stat_ai(cur, ai_monsters[ai_lowest_true_max_stat_pos]['id'], field=field) \
+           >= calculate_max_stat_ai(cur, player_monsters[player_true_max_stat_pos]['id'], field=field)
 
 
 def best_combo_consists_of_only_cards_from_the_hand(best_combo):
-    return reduce(lambda x, y: x >= 0 and y >= 0, best_combo[ORDERING], initial=True) \
-           if best_combo is not None else None
+    return False if best_combo is None or len(best_combo[ORDERING]) == 0 else \
+        all((pos >= 0 for pos in best_combo[ORDERING]))
 
 
 def best_combo_consists_of_playing_on_top_of_a_card_on_the_field(best_combo):
-    return best_combo[ORDERING][0] < 0 and len(best_combo[ORDERING]) >= 2
+    return len(best_combo[ORDERING]) >= 2 and best_combo[ORDERING][0] < 0
 
 
 def convert_best_combo(cur, best_combo):
@@ -528,7 +532,7 @@ def combo_equip(pos, ai_backrow, ai_frontrow, equip):
     return combo
 
 
-def set_magic_ai(cur, ai):
+def lbl_set_magic(cur, ai):
     # Trap
     pos = get_first_pos_of_type_in_hand(cur, ai['hand'], 'Trap')
     if pos is not None:
@@ -558,12 +562,72 @@ def set_magic_ai(cur, ai):
 SEE_THROUGH = 0
 
 
+def lbl_find_best_combo(cur, ai_player, field):
+    """ Returns a converted best combo. """
+    best_combo = find_best_combo_in_ai_board_and_hand(cur, ai_player['hand'], monster_board=ai_player['frontrow'],
+                                                      max_fusion_length=utils.get_ai_stats(ai_player['name'])[
+                                                          utils.MAX_FUSION_LENGTH],
+                                                      field=field)
+
+    combo = convert_best_combo(cur, best_combo)
+    if combo is not None:
+        return combo
+
+    # No combo play -> set magic
+    if best_combo[RESULT_MAX_STAT] == 0:
+        combo = lbl_set_magic(cur, ai_player)
+        return combo
+
+    # Doing nothing to a monster from the board -> compatible field
+    best_type = utils.get_card_type_from_id(cur, best_combo[IDS][0])
+    for support_field in support_type_with_field.get(best_type, []):
+        # This skips the second field if there is a second one
+        if field == support_field:
+            break
+
+        pos = get_first_pos_in_hand(cur, support_field, ai_player['hand'])
+        if pos is not None:
+            combo = [(pos, FACE_UP)]
+            return combo
+
+    # Fallback : best max stat in hand
+    pos, _ = get_first_pos_of_base_max_stat_in_hand(cur, ai_player['hand'])
+    if pos is not None:
+        combo = [(pos, FACE_DOWN)]
+        return combo
+
+    # Fallback² : no monsters
+    odds = (1, 5)
+    combo = []
+    for pos in range(5):
+        card = ai_player['hand'][pos]
+        _type = utils.get_card_type_from_id(cur, card)
+
+        if _type == 'Equip':
+            sub_combo = combo_non_equip(pos, ai_player['backrow'])
+        else:
+            sub_combo = combo_equip(pos, ai_player['backrow'], ai_player['frontrow'], ai_player['hand'][pos])
+        combo.append((sub_combo, odds))
+
+    return combo
+
+
+def lbl_improve_monster(cur, ai_player, field):
+    """ Returns a converted combo of the monster to be improved. """
+    improve = improve_monster_from_ai_board_and_hand(cur, ai_player['hand'], ai_player['frontrow'],
+                                           max_improve_length=utils.get_ai_stats(ai_player['name'])[utils.MAX_IMPROVE_LENGTH],
+                                           field=field)
+
+    if improve is None:
+        return lbl_find_best_combo(cur, ai_player, field)
+
+
 def hand_ai(cur, player, ai_player, current_ai_turn, field=None):
     """ Returns the position of the chosen card(s) and whether the play is face-down or face-up.
         If probabilities are involved, returns a list of tuples, each containing a summary of the play associated with its probability.
     """
-    combo = None
-    always_look_facedown_cards = utils.get_ai_stats()[ai_player['name']][utils.ATTACK_PERCENT] == SEE_THROUGH
+    combo = []
+    always_look_facedown_cards = utils.get_ai_stats(ai_player['name'])[utils.ATTACK_PERCENT] == SEE_THROUGH
 
     # 1. Direct kill
     for spell_name, dmg in direct_damages.items():
@@ -584,19 +648,21 @@ def hand_ai(cur, player, ai_player, current_ai_turn, field=None):
                                                                                                              ai_player[
                                                                                                                  'hand'])
 
-        # 3a1. Regain control with a single monster
-        if is_empty(ai_player['frontrow']):
-            combo = [(pos_base_max_stat_in_ai_hand, FACE_DOWN)]
-            return combo
-
         pos_best_visible_player, stat_best_visible_player_true_max_stat = get_first_pos_of_true_max_stat_on_board(cur,
                                                                                                                   player[
                                                                                                                       'frontrow'],
                                                                                                                   field,
                                                                                                                   always_look_facedown_cards)
-        if stat_base_max_stat_in_ai_hand >= stat_best_visible_player_true_max_stat:
-            combo = [(pos_base_max_stat_in_ai_hand, FACE_DOWN)]
-            return combo
+
+        # 3a1. Regain control with a single monster
+        if pos_base_max_stat_in_ai_hand is not None:
+            if is_empty(ai_player['frontrow']):
+                combo = [(pos_base_max_stat_in_ai_hand, FACE_DOWN)]
+                return combo
+
+            if stat_base_max_stat_in_ai_hand >= stat_best_visible_player_true_max_stat:
+                combo = [(pos_base_max_stat_in_ai_hand, FACE_DOWN)]
+                return combo
 
         # 3a2. Regain control with magic/trap
         if current_ai_turn >= 4:  # ai_player['hand'] - 5 + ai_player['remaining_deck'] <= 32:
@@ -657,93 +723,62 @@ def hand_ai(cur, player, ai_player, current_ai_turn, field=None):
                     return combo
 
         # 3a3. Regain control with a combo
-        best_combo = find_best_combo_in_ai_board_and_hand(cur, ai_player['hand'], monster_board=ai_player['frontrow'],
-                                                          max_fusion_length=utils.get_ai_stats()[ai_player['name']][
-                                                              utils.MAX_FUSION_LENGTH],
-                                                          field=field)
-
-        combo = convert_best_combo(cur, best_combo)
-        if combo is not None:
-            return combo
-
-        # No combo play -> set magic
-        if best_combo[RESULT_MAX_STAT] == 0:
-            combo = set_magic_ai(cur, ai_player)
-            return combo
-
-        # Doing nothing to a monster from the board -> compatible field
-        best_type = utils.get_card_type_from_id(cur, best_combo[IDS][0])
-        for support_field in support_type_with_field.get(best_type, []):
-            # This skips the second field if there is a second one
-            if field == support_field:
-                break
-
-            pos = get_first_pos_in_hand(cur, support_field, ai_player['hand'])
-            if pos is not None:
-                combo = [(pos, FACE_UP)]
-                return combo
-
-        # Fallback : best max stat in hand
-        pos = get_first_pos_of_base_max_stat_in_hand(cur, ai_player['hand'])
-        if pos is not None:
-            combo = [(pos, FACE_DOWN)]
-            return combo
-
-        # Fallback² : no monsters
-        odds_num, odds_denom = 1, 5
-        combo = []
-        for pos in range(5):
-            card = ai_player['hand'][pos]
-            _type = utils.get_card_type_from_id(cur, card)
-
-            if _type == 'Equip':
-                sub_combo = combo_non_equip(pos, ai_player['backrow'])
-            else:
-                sub_combo = combo_equip(pos, ai_player['backrow'], ai_player['frontrow'], ai_player['hand'][pos])
-            combo.append((sub_combo, (odds_num, odds_denom)))
-
-        return combo
+        return lbl_find_best_combo(cur, ai_player, field)
 
     # 3b. The AI thinks it has field control
     odds_num, odds_denom = 1, 1
     # 3b1. Clear player's backrow
-    if any(player['backrow']) and (pos := get_first_pos_in_hand(cur, 'Raigeki', ai_player['hand'])) is not None:
-        odds_num *= utils.get_ai_stats()[ai_player['name']][utils.SPELL_PERCENT]
+    if any(player['backrow']) and (pos := get_first_pos_in_hand(cur, "Harpie's Feather Duster", ai_player['hand'])) is not None:
+        odds_num *= utils.get_ai_stats(ai_player['name'])[utils.SPELL_PERCENT]
         odds_denom *= 100
-        combo = [(pos, FACE_DOWN, (odds_num, odds_denom))]
+        combo = [([(pos, FACE_DOWN)], (odds_num, odds_denom))]
 
-    # 3b2.Improve monster if low enough LP
-    if ai_player['LP'] <= utils.get_ai_stats()[ai_player['name']][utils.LOW_LP_THRESHOLD]:
-        improve = improve_monster_from_ai_board_and_hand(cur, ai_player['hand'],
-                                                         monster_board=ai_player['frontrow'],
-                                                         max_improve_length=utils.get_ai_stats()[ai_player['name']][
-                                                             utils.MAX_IMPROVE_LENGTH],
-                                                         field=field)
-        combo.append((convert_best_combo(cur, improve), (odds_denom - odds_num, odds_denom)))
+    # 3b2. Improve monster if low enough LP
+    if ai_player['LP'] <= utils.get_ai_stats(ai_player['name'])[utils.LOW_LP_THRESHOLD]:
+        # improve = improve_monster_from_ai_board_and_hand(cur, ai_player['hand'],
+        #                                                  monster_board=ai_player['frontrow'],
+        #                                                  max_improve_length=utils.get_ai_stats()[ai_player['name']][
+        #                                                      utils.MAX_IMPROVE_LENGTH],
+        #                                                  field=field)
+        #
+        # if improve is None:
+        #     improve = find_best_combo_in_ai_board_and_hand(cur, ai_player['hand'], monster_board=ai_player['frontrow'],
+        #                                               max_fusion_length=utils.get_ai_stats(ai_player['name')[
+        #                                                   utils.MAX_FUSION_LENGTH],
+        #                                               field=field)
+        #     if improve is None:
+        #         improve = lbl_set_magic(cur, ai_player)
+        improve = lbl_improve_monster(cur, ai_player, field)
+        if len(combo) == 0:
+            combo = improve
+        else:
+            combo.append((improve, (odds_denom - odds_num, odds_denom)))
         return combo
 
-    odds_num *= odds_denom - odds_num
-    odds_denom *= 100
+    # If we already have conditional combos, consider the remaining probabilities
+    if len(combo) > 0:
+        odds_num = odds_denom - odds_num
+        odds_denom = 100
 
+    # Choose randomly between IMPROVE_MONSTER, FIND_BEST_COMBO and SET_MAGIC
     domination_mode = utils.TOTAL_DOMINATION \
         if ai_has_total_domination(cur, player['frontrow'], ai_player['frontrow'], field, always_look_facedown_cards) \
         else utils.LACKS_TOTAL_DOMINATION
 
-    improve = improve_monster_from_ai_board_and_hand(cur, ai_player['hand'],
-                                                     monster_board=ai_player['frontrow'],
-                                                     max_improve_length=utils.get_ai_stats()[ai_player['name']][
-                                                         utils.MAX_IMPROVE_LENGTH],
-                                                     field=field)
-    combo.append((convert_best_combo(cur, improve), odds_num*utils.get_ai_stats()[ai_player['name']][domination_mode][utils.IMPROVE_MONSTER], odds_denom*100))
+    best_combo = lbl_find_best_combo(cur, ai_player, field)
+    best_combo_odds = (odds_num*utils.get_ai_stats(ai_player['name'])[domination_mode][utils.FIND_BEST_COMBO],
+                       odds_denom * 100)
+    combo.append((best_combo, best_combo_odds))
 
-    best_combo = find_best_combo_in_ai_board_and_hand(cur, ai_player['hand'], monster_board=ai_player['frontrow'],
-                                                      max_fusion_length=utils.get_ai_stats()[ai_player['name']][
-                                                          utils.MAX_FUSION_LENGTH],
-                                                      field=field)
-    combo.append((convert_best_combo(cur, best_combo), odds_num*utils.get_ai_stats()[ai_player['name']][domination_mode][utils.FIND_BEST_COMBO], odds_denom*100))
+    improve = lbl_improve_monster(cur, ai_player, field)
+    improve_odds = (odds_num * utils.get_ai_stats(ai_player['name'])[domination_mode][utils.IMPROVE_MONSTER],
+                    odds_denom * 100)
+    combo.append((improve, improve_odds))
 
-    set_magic = set_magic_ai(cur, ai_player)
-    combo.append((set_magic, odds_num*utils.get_ai_stats()[ai_player['name']][domination_mode][utils.SET_MAGIC], odds_denom*100))
+    set_magic = lbl_set_magic(cur, ai_player)
+    set_magic_odds = (odds_num*utils.get_ai_stats(ai_player['name'])[domination_mode][utils.SET_MAGIC],
+                      odds_denom * 100)
+    combo.append((set_magic, set_magic_odds))
 
     return combo
 

@@ -22,8 +22,7 @@ SET_MAGIC = 'SET_MAGIC'
 
 ai_stats = None
 
-
-def get_ai_stats(_ai_stats=ai_stats):
+def get_all_ai_stats(_ai_stats=ai_stats):
     if _ai_stats is not None:
         return _ai_stats
 
@@ -73,6 +72,10 @@ def get_ai_stats(_ai_stats=ai_stats):
             del row['Opponent']
 
     return _ai_stats
+
+
+def get_ai_stats(ai_name, _ai_stats=ai_stats):
+    return get_all_ai_stats()[ai_name]
 
 
 def connect_to_YFM_database(db_file='YFM.db'):
