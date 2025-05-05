@@ -1,4 +1,14 @@
-from utils import *
+# from utils import *
+import sqlite3
+
+
+def connect_to_YFM_database(db_file='YFM.db'):
+    # Create a SQL connection to our SQLite database
+    con = sqlite3.connect(db_file)
+    # creating cursor
+    cur = con.cursor()
+
+    return con, cur
 
 
 def clean_desc(desc):
@@ -91,6 +101,8 @@ if __name__ == '__main__':
 
     # print(list(cur.execute(f"SELECT * FROM 'Duelists'")))
     # print(list(cur.execute(f"SELECT * FROM 'DuelistPoolSamplingRates'")))
-    print(list(cur.execute(f"SELECT * FROM 'Cards'")))
+    print(list(cur.execute(f"SELECT * FROM 'Duelists'")))
+
+
 
     con.close()

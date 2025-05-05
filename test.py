@@ -1,12 +1,11 @@
 import sqlite3
 
-dbfile = 'YFM.db'
+import ai_board
+import db
+import utils
 
-# Create a SQL connection to our SQLite database
-con = sqlite3.connect(dbfile)
-# creating cursor
-cur = con.cursor()
-cur.execute(f"SELECT EquippedID FROM Equipping "
-                  f"WHERE EquippedID = 12 AND EquipID = 301")
+con, cur = db.connect_to_YFM_database()
 
-print(cur.fetchone())
+print([utils.get_card_id_from_name(cur, name) for name in ai_board.forced_defend_monsters])
+
+con.close()
