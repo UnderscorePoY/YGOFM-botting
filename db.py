@@ -1,5 +1,20 @@
 # from utils import *
 import sqlite3
+from sqlite3 import Connection, Cursor
+
+
+class YGOFMDatabase:  # TODO: implement and use
+    def __init__(self, db_filename: str = 'YFM.db'):
+        self.filename = db_filename
+        self.connection: Connection | None = None
+        self.cursor: Cursor | None = None
+
+    def __enter__(self):
+        self.connection = sqlite3.connect(self.filename)
+        self.cursor = self.connection.cursor()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.connection.close()
 
 
 def connect_to_YFM_database(db_file='YFM.db'):
@@ -15,11 +30,17 @@ def clean_desc(desc):
     return [col[0] for col in desc]
 
 
-def print_equip_list_by_monster(cur):
-    monsters = [row for row in cur.execute(f"SELECT CardID, CardName FROM 'Cards' WHERE Attack > 0 OR Defense > 0 ORDER BY CardName ASC")]
+def print_equip_list_by_monster(cursor: Cursor):
+    monsters = [row for row in cursor.execute(
+        f"SELECT CardID, CardName "
+        f"FROM 'Cards' "
+        f"WHERE Attack > 0 "
+        f"   OR Defense > 0 "
+        f"ORDER BY CardName ASC"
+    )]
 
     for monster_id, monster_name in monsters:
-        equips = [row for row, in cur.execute(
+        equips = [row for row, in cursor.execute(
             f"SELECT CardName "
             f"FROM 'Cards' "
             f"WHERE CardName NOT IN ('Megamorph', 'Bright Castle') "
@@ -48,7 +69,8 @@ def print_monster_list_by_equip(cur):
             f"FROM 'Equipping' "
             f"WHERE EquipID = '{equip_id}'"
             f") "
-            f"ORDER BY MAX(Attack, Defense) DESC, CardName ASC")]
+            f"ORDER BY MAX(Attack, Defense) DESC, CardName ASC"
+        )]
 
         max_name_len, max_atk_digits, max_def_digits = 0, 0, 0
         max_gs1_len, max_gs2_len, max_type_len = 0, 0, 0
@@ -101,8 +123,6 @@ if __name__ == '__main__':
 
     # print(list(cur.execute(f"SELECT * FROM 'Duelists'")))
     # print(list(cur.execute(f"SELECT * FROM 'DuelistPoolSamplingRates'")))
-    print(list(cur.execute(f"SELECT * FROM 'Duelists'")))
-
-
+    print(list(cur.execute(f"SELECT DISTINCT CardType FROM 'Cards'")))
 
     con.close()

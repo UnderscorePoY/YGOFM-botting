@@ -210,7 +210,7 @@ def test_improve_monster_from_ai_hand_and_board(cur, tests):
         is_passed = True
         for actual_test in actual_tests:
             # if actual_test == exp_ordering:
-            for (res_pos, exp_pos) in zip(actual_test, action.description):
+            for (res_pos, exp_pos) in zip(actual_test, action.descriptions):
                 is_passed &= res_pos == exp_pos
             # elif actual_test == exp_result_id:
             #     is_passed &= exp_result_id == action.result_id

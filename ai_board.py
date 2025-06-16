@@ -1,10 +1,10 @@
 import itertools
-from typing import Iterator
 
 from ai import *
 from probability_tree import *
+from types_ import Field, Opponent, IsActive, EndOfTurn
 
-skip_defend_monsters: list[str] = [
+skip_defend_monsters: list[str] = [  # Order compatible with AI routine
     'Blue-eyes Ultimate Dragon',
     'Gate Guardian',
     'Perfectly Ultimate Great Moth',
@@ -15,16 +15,8 @@ skip_defend_monsters: list[str] = [
     'Metalzoa'
 ]
 
-fields_board_ai: list[str] = [
-    'Forest',
-    'Wasteland',
-    'Mountain',
-    'Sogen',
-    'Umi',
-    'Yami'
-]
 
-forced_defend_monsters: list[str] = [
+forced_defend_monsters: list[str] = [  # Order compatible with AI routine
     'Cocoon of Evolution',
     'Millennium Shield',
     'Labyrinth Wall',
@@ -48,472 +40,531 @@ forced_defend_monsters: list[str] = [
 ]
 
 
-def lbl_next_battle(cur: Cursor, player: Opponent, ai_player: Opponent, field: Field,
-                    always_look_facedown_cards: bool) -> Optional[Actions]:
-    """ Returns `None` when no more battle is available. """
+def is_active(card: Card) -> bool:
+    return card is not None and card.is_active
 
-    actions: Optional[Actions] = None
+
+def is_faceup(card: Card, always_look_facedown_cards: bool) -> bool:
+    return (
+        card is not None
+        and (always_look_facedown_cards or card.face == Face.UP)
+    )
+
+
+def is_faceup_attack(card: Card, always_look_facedown_cards: bool) -> bool:
+    return (
+        card is not None
+        and (always_look_facedown_cards or card.face == Face.UP)
+        and card.battle_mode == BattleMode.ATTACK
+    )
+
+
+def is_faceup_defense(card: Card, always_look_facedown_cards: bool) -> bool:
+    return (
+        card is not None
+        and (always_look_facedown_cards or card.face == Face.UP)
+        and card.battle_mode == BattleMode.DEFENSE
+    )
+
+
+def is_facedown(card: Card, always_look_facedown_cards: bool) -> bool:
+    return (
+        card is not None
+        and not always_look_facedown_cards
+        and card.face == Face.DOWN
+    )
+
+
+def lbl_next_battle(player: Opponent, ai_player: Opponent, always_look_facedown_cards: bool) \
+        -> Actions | None:
+    """ Returns `None` if there is no more battle. Does not modify the opponent. """
+
+    actions: Actions | None
 
     # End of turn
-    if is_empty(ai_player['frontrow']):
+    if is_empty(ai_player.frontrow):
         actions = None
         return actions
 
     # Player has no monsters : attack with all remaining AI monsters
-    if is_empty(player['frontrow']):
-        actions = Actions([
-            Action([(card['pos'], ATTACK, encode_frontrow_pos(2))])
-            for card in sorted(list(filter(lambda x: x is not None
-                                                     and x['is_active'],
-                                           ai_player['frontrow'])),
-                               key=lambda x: descending_true_atk_sorting_key(cur, x, field))
-        ])
-        return actions
+    # TODO : this was changed to only yield one monster at a time. Change it back if it's justified
+    if is_empty(player.frontrow):
+        # actions = Actions()
+        # for card in sorted(
+        #         list(filter(is_active, ai_player.frontrow)),
+        #         key=descending_true_atk_sorting_key
+        # ):
+        #     action = Action([Action.Description(card.pos, BattleMode.ATTACK, Position(2, Position.Mode.FRONTROW))])
+        #     actions.append_deepest_horizontally([action])
+        #
+        # if len(actions) > 0:
+        #     return actions
+        for card in sorted(
+            list(filter(is_active, ai_player.frontrow)),
+            key=descending_true_atk_sorting_key
+        ):
+            actions = Actions([
+                Action([Action.Description(card.pos, BattleMode.ATTACK, Position(2, Position.Mode.FRONTROW))])
+            ])
+            return actions
 
     # Check for lethal if player has visible monsters
-    if 0 < len(list(filter(lambda x: x is not None
-                                     and (always_look_facedown_cards or x['face'] == FACE_UP)
-                                     and x['battle_mode'] == ATTACK,
-                           player['frontrow']))):
-        ai_pos, _ = get_first_pos_of_max_true_atk_in(cur, ai_player['frontrow'], field, True, only_check_active=True)
-        pl_pos, _ = get_first_pos_of_lowest_true_atk_in(cur, player['frontrow'], field, always_look_facedown_cards,
-                                                        battle_mode=ATTACK)
+    if any(filter(lambda x: is_faceup_attack(x, always_look_facedown_cards), player.frontrow)):
+        ai_card, _ = first_card_with_best_true_atk_in(ai_player.frontrow,
+                                                      look_facedown_cards=True, only_check_active=True)
+        pl_card, _ = first_card_with_worst_true_atk_in(player.frontrow,
+                                                       look_facedown_cards=always_look_facedown_cards,
+                                                       battle_mode=BattleMode.ATTACK)
 
-        ai_stat = calculate_max_base_stat_plus_field(cur, ai_player['frontrow'][ai_pos]['id'], field)
-        pl_stat = calculate_max_base_stat_plus_field(cur, player['frontrow'][pl_pos]['id'], field) \
-            if any(player['frontrow']) else 0
+        ai_atk = ai_card.base_attack_plus_field
+        pl_atl = pl_card.base_attack_plus_field
 
-        if ai_stat - pl_stat >= player['LP'] \
-                and any(player['frontrow']) \
-                and pl_pos is not None:
+        if ai_atk - pl_atl >= player.lp:  # and pl_card is not None:  # TODO: and any(player.frontrow) \ ?
             actions = Actions([
-                Action([(encode_frontrow_pos(ai_pos), ATTACK, encode_frontrow_pos(pl_pos))])
+                Action([Action.Description(ai_card.pos, BattleMode.ATTACK, pl_card.pos)])
             ])
             return actions
 
     # Battle visible player monsters in attack
-    for pl_card in sorted(list(filter(lambda x: x is not None
-                                                and (always_look_facedown_cards or x['face'] == FACE_UP)
-                                                and x['battle_mode'] == ATTACK,
-                                      player['frontrow'])),
-                          key=lambda x: descending_true_atk_sorting_key(cur, x, field)):
-        for ai_card in sorted(list(filter(lambda x: x is not None
-                                                    and x['is_active'],
-                                          ai_player['frontrow'])),
-                              key=lambda x: ascending_true_atk_sorting_key(cur, x, field)):
-            pl_atk = calculate_true_atk_stat(cur, pl_card['id'], field, pl_card['equip_stage']) \
-                     + 500 * has_advantage_over(pl_card['star'], ai_card['star'])
-            ai_atk = calculate_true_atk_stat(cur, ai_card['id'], field, ai_card['equip_stage']) \
-                     + 500 * has_advantage_over(ai_card['star'], pl_card['star'])
+    for pl_card in sorted(list(filter(lambda x: is_faceup_attack(x, always_look_facedown_cards),
+                                      player.frontrow)),
+                          key=descending_true_atk_sorting_key):
+        for ai_card in sorted(list(filter(is_active,
+                                          ai_player.frontrow)),
+                              key=ascending_true_atk_sorting_key):
+            pl_atk = (
+                pl_card.true_attack
+                + 500 * pl_card.star.has_advantage_over(ai_card.star)
+            )
+            ai_atk = (
+                ai_card.true_attack
+                + 500 * ai_card.star.has_advantage_over(pl_card.star)
+            )
 
             if ai_atk > pl_atk:
                 actions = Actions([
-                    Action([(ai_card['pos'], ATTACK, pl_card['pos'])])
+                    Action([Action.Description(ai_card.pos, BattleMode.ATTACK, pl_card.pos)])
                 ])
                 return actions
 
     # Battle visible player monsters in defense
-    for pl_card in sorted(list(filter(lambda x: x is not None
-                                                and (always_look_facedown_cards or x['face'] == FACE_UP)
-                                                and x['battle_mode'] == DEFENSE,
-                                      player['frontrow'])),
-                          key=lambda x: descending_true_def_sorting_key(cur, x, field)):
-        for ai_card in sorted(list(filter(lambda x: x is not None
-                                                    and x['is_active'],
-                                          ai_player['frontrow'])),
-                              key=lambda x: ascending_true_atk_sorting_key(cur, x, field)):
-            pl_def = calculate_true_def_stat(cur, pl_card['id'], field, pl_card['equip_stage']) \
-                     + 500 * has_advantage_over(pl_card['star'], ai_card['star'])
-            ai_atk = calculate_true_atk_stat(cur, ai_card['id'], field, ai_card['equip_stage']) \
-                     + 500 * has_advantage_over(ai_card['star'], pl_card['star'])
+    for pl_card in sorted(list(filter(lambda x: is_faceup_defense(x, always_look_facedown_cards),
+                                      player.frontrow)),
+                          key=descending_true_def_sorting_key):
+        for ai_card in sorted(list(filter(is_active,
+                                          ai_player.frontrow)),
+                              key=ascending_true_atk_sorting_key):
+            pl_def = (
+                pl_card.true_defense
+                + 500 * pl_card.star.has_advantage_over(ai_card.star)
+            )
+            ai_atk = (
+                ai_card.true_attack
+                + 500 * ai_card.star.has_advantage_over(pl_card.star)
+            )
 
             if ai_atk > pl_def:
                 actions = Actions([
-                    Action([(ai_card['pos'], ATTACK, pl_card['pos'])])
+                    Action([Action.Description(ai_card.pos, BattleMode.ATTACK, pl_card.pos)])
                 ])
                 return actions
 
     # Battle facedown player monsters
     actions = Actions()
-    attack_odds = Odds((get_ai_stats(ai_player['name']).attack_percent, 100))
+    attack_odds = Odds((get_ai_stats(ai_player.name).attack_percent, 100))
     no_attack_odds = attack_odds.complementary()
 
-    for ai_card in sorted(list(filter(lambda x: x is not None
-                                                and x['is_active'],
-                                      ai_player['frontrow'])),
-                          key=lambda x: descending_true_atk_sorting_key(cur, x, field)):
+    for ai_card in sorted(list(filter(is_active,
+                                      ai_player.frontrow)),
+                          key=descending_true_atk_sorting_key):
         _next: Actions = actions
-        no_attack: Optional[Action] = None
+        no_attack: Action | None = None
         cur_level = Action.BASE_LEVEL - 1
-        for pl_card in sorted(list(filter(lambda x: x is not None
-                                                    and not always_look_facedown_cards
-                                                    and x['face'] == FACE_DOWN,
-                                          player['frontrow'])),
-                              key=lambda x: x['pos']):
+        for pl_card in sorted(list(filter(lambda x: is_facedown(x, always_look_facedown_cards),
+                                          player.frontrow)),
+                              key=lambda x: x.pos):
             cur_level += 1
-            attack = Action([(ai_card['pos'], ATTACK, pl_card['pos'])], odds=attack_odds)
+            attack = Action(
+                [Action.Description(ai_card.pos, BattleMode.ATTACK, pl_card.pos)],
+                odds=attack_odds
+            )
             no_attack = Action([], odds=no_attack_odds)
             _next.append_horizontally([attack, no_attack], level=cur_level)
 
             _next = no_attack.next
 
         # If the player has monsters left
-        if any(list(filter(None, player['frontrow']))):
-            if ai_card['name'] in skip_defend_monsters:
-                no_attack.description.append((ai_card['pos'], ATTACK))
+        if any(list(filter(None, player.frontrow))):
+            if ai_card.name in skip_defend_monsters:
+                no_attack.descriptions.append(Action.Description(ai_card.pos, BattleMode.ATTACK))
             else:
-                no_attack.description.append((ai_card['pos'], DEFENSE))
+                no_attack.descriptions.append(Action.Description(ai_card.pos, BattleMode.DEFENSE))
 
         return actions
 
-    assert(False, "Should never be reached")
+    assert False, "Should never be reached"
 
 
-def board_ai(cur: Cursor, player: Opponent, ai_player: Opponent, field: Field = None) -> Iterator[Actions]:
-    """ Creates an iterator of actions to perform on the board. This does not modify the board.
-    Odds are not cumulated. Returns `None` when no more action is possible. """
+def board_ai(cursor: Cursor, player: Opponent, ai_player: Opponent, field: Field) \
+        -> Iterator[Actions]:
+    """ Creates an iterator of actions to perform on the board. This does not modify the board. """
 
-    actions: Optional[Actions] = None
-    always_look_facedown_cards = get_ai_stats(ai_player['name']).attack_percent == AIStat.SEE_THROUGH
+    actions: Actions | None
+    always_look_facedown_cards = get_ai_stats(ai_player.name).attack_percent == AIStat.SEE_THROUGH
 
     # Magic zone
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Harpie's Feather Duster
-        while (pos := get_first_pos_in(cur, "Harpie's Feather Duster", ai_player['backrow'], only_check_active=True)) \
+        while (card := get_first_card_in("Harpie's Feather Duster", ai_player.backrow, 
+                                         only_check_active=True)) \
                       is not None:
-            if any(player['backrow']):
-                harpie_odds = Odds((get_ai_stats(ai_player['name']).spell_percent, 100))
+            if any(player.backrow):
+                harpie_odds = Odds((get_ai_stats(ai_player.name).spell_percent, 100))
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), FACE_UP)], odds=harpie_odds),
-                    Action([(encode_backrow_pos(pos), DARKEN)], odds=harpie_odds.complementary())
+                    Action([Action.Description(card.pos, Face.UP)], odds=harpie_odds),
+                    Action([Action.Description(card.pos, IsActive.DARKEN)], odds=harpie_odds.complementary())
                 ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), DARKEN)])
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Direct damage / heal
         for card_name, _ in itertools.chain(direct_damages.items(), direct_heals.items()):
-            while (pos := get_first_pos_in(cur, card_name, ai_player['backrow'], only_check_active=True)) \
+            while (card := get_first_card_in(card_name, ai_player.backrow, only_check_active=True)) \
                           is not None:
-                if player['LP'] > ai_player['LP']:
-                    if ai_player['LP'] > get_ai_stats(ai_player['name']).low_lp_threshold \
-                            or not any(player['backrow']):
+                if player.lp > ai_player.lp:
+                    if ai_player.lp > get_ai_stats(ai_player.name).low_lp_threshold \
+                            or not any(player.backrow):
                         actions = Actions([
-                            Action([(encode_backrow_pos(pos), FACE_UP)])
+                            Action([Action.Description(card.pos, Face.UP)])
                         ])
                     else:
-                        magic_odds = Odds((100 - get_ai_stats(ai_player['name']).spell_percent, 100))
+                        magic_odds = Odds((100 - get_ai_stats(ai_player.name).spell_percent, 100))
                         actions = Actions([
-                            Action([(encode_backrow_pos(pos), FACE_UP)], odds=magic_odds),
-                            Action([(encode_backrow_pos(pos), DARKEN)], odds=magic_odds.complementary())
+                            Action([Action.Description(card.pos, Face.UP)], odds=magic_odds),
+                            Action([Action.Description(card.pos, IsActive.DARKEN)], odds=magic_odds.complementary())
                         ])
                 else:
                     actions = Actions([
-                        Action([(encode_backrow_pos(pos), DARKEN)])
+                        Action([Action.Description(card.pos, IsActive.DARKEN)])
                     ])
                 yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Equips
-        while (equip_pos := get_first_pos_of_type_in(cur, 'Equip', ai_player['backrow'], only_check_active=True)) \
+        while (equip_card := first_card_with_type_in(Type.EQUIP, ai_player.backrow, only_check_active=True)) \
                             is not None:
-            equip_id: int = ai_player['backrow'][equip_pos]['id']
-            monster_pos = get_first_monster_compatible_in(cur, equip_id, ai_player['frontrow'])
-            if monster_pos is not None:
+            monster_card = get_first_card_equipable_with_in(cursor, equip_card.id, ai_player.frontrow)
+            if monster_card is not None:
                 actions = Actions([
-                    Action([(encode_backrow_pos(equip_pos), FACE_UP), (encode_frontrow_pos(monster_pos), FACE_UP)])
+                    Action([Action.Description(equip_card.pos, Face.UP, monster_card.pos)])
                 ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(equip_pos), DARKEN)])
+                    Action([Action.Description(equip_card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Rituals
-        while (ritual_pos := get_first_pos_of_type_in(cur, 'Ritual', ai_player['backrow'], only_check_active=True)) \
+        while (ritual_card := first_card_with_type_in(Type.RITUAL, ai_player.backrow, only_check_active=True)) \
                              is not None:
-            ritual_id = ai_player['backrow'][ritual_pos]['id']
-            if check_ritual(cur, ritual_id, ai_player['frontrow']):
-                actions = Actions([
-                    Action([(encode_backrow_pos(ritual_pos), FACE_UP)])
+            if check_ritual(cursor, ritual_card.id, ai_player.frontrow).is_successful:
+                actions = Actions([  # TODO: check_ritual has all ritual info
+                    Action([Action.Description(ritual_card.pos, Face.UP)])
                 ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(ritual_pos), DARKEN)])
+                    Action([Action.Description(ritual_card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Dark-piercing Light
-        while (pos := get_first_pos_in(cur, 'Dark-piercing Light', ai_player['backrow'], only_check_active=True)) \
+        while (card := get_first_card_in('Dark-piercing Light', ai_player.backrow, only_check_active=True)) \
                       is not None:
-            if any(player['frontrow']) \
-                    and all([card['face'] == FACE_DOWN for card in filter(None, player['frontrow'])]) \
-                    and len(list(filter(None, player['frontrow']))) > len(list(filter(None, ai_player['frontrow']))):
+            if any(player.frontrow) \
+                    and all([card.face == Face.DOWN for card in filter(None, player.frontrow)]) \
+                    and len(list(filter(None, player.frontrow))) > len(list(filter(None, ai_player.frontrow))):
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), FACE_UP)])
+                    Action([Action.Description(card.pos, Face.UP)])
                 ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), DARKEN)])
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Swords of Revealing Light
-        while (pos := get_first_pos_in(cur, 'Swords of Revealing Light', ai_player['backrow'], only_check_active=True)) \
+        while (card := get_first_card_in('Swords of Revealing Light', ai_player.backrow, only_check_active=True)) \
                       is not None:
-            if player['remaining_turns_under_swords'] == 0 \
-                    and any(filter(lambda x: x is not None
-                                             and (always_look_facedown_cards or x['face'] == FACE_UP),
-                                   player['frontrow'])):
-                if is_empty(ai_player['frontrow']):
+            if player.remaining_turns_under_swords == 0 \
+                    and any(filter(lambda x: is_faceup(x, always_look_facedown_cards),
+                                   player.frontrow)):
+                if is_empty(ai_player.frontrow):
                     actions = Actions([
-                        Action([(encode_backrow_pos(pos), FACE_UP)])
+                        Action([Action.Description(card.pos, Face.UP)])
                     ])
                 else:
-                    player_pos, _ = get_first_pos_of_true_max_stat_in(cur, player['frontrow'], field,
-                                                                      always_look_facedown_cards)
-                    player_stat = calculate_max_base_stat_plus_field(cur, player['frontrow'][player_pos]['id'], field)
-                    ai_pos, _ = get_first_pos_of_true_max_stat_in(cur, ai_player['frontrow'], field, True)
-                    ai_stat = calculate_max_base_stat_plus_field(cur, ai_player['frontrow'][player_pos]['id'], field)
-                    if player_stat >= ai_stat:
+                    player_card, _ = first_card_with_best_true_max_stat_in(
+                        player.frontrow,
+                        look_facedown_cards=always_look_facedown_cards
+                    )
+                    player_stat = player_card.max_base_stat_plus_field
+                    ai_card, _ = first_card_with_best_true_max_stat_in(ai_player.frontrow, look_facedown_cards=True)
+                    if ai_card is None or player_stat >= ai_card.max_base_stat_plus_field:
                         actions = Actions([
-                            Action([(encode_backrow_pos(pos), FACE_UP)])
+                            Action([Action.Description(card.pos, Face.UP)])
                         ])
                     else:
                         actions = Actions([
-                            Action([(encode_backrow_pos(pos), DARKEN)])
+                            Action([Action.Description(card.pos, IsActive.DARKEN)])
                         ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), DARKEN)])
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Stop Defense
-        while (pos := get_first_pos_in(cur, 'Stop Defense', ai_player['backrow'], only_check_active=True)) \
+        while (card := get_first_card_in('Stop Defense', ai_player.backrow, only_check_active=True)) \
                       is not None:
-            if ai_player['remaining_turns_under_swords'] == 0 \
-                    and any(filter(None, player['frontrow'])) \
-                    and any(filter(None, ai_player['frontrow'])):
-                ai_pos, _ = get_first_pos_of_true_max_stat_in(cur, ai_player['frontrow'], field, True)
-                pl_pos, _ = get_first_pos_of_lowest_true_max_stat_in(cur, player['frontrow'], field,
-                                                                     always_look_facedown_cards)
+            # Both players must have monster(s) with AI not under swords
+            if not (
+                ai_player.remaining_turns_under_swords == 0
+                and any(filter(None, player.frontrow))
+                and any(filter(None, ai_player.frontrow))
+            ):
+                actions = Actions([
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
+                ])
+                yield actions
+                continue
 
-                ai_stat = calculate_true_atk_stat(cur, ai_player['frontrow'][ai_pos]['id'], field, ai_player['frontrow'][ai_pos]['equip_stage'])
-                pl_stat = calculate_true_atk_stat(cur, player['frontrow'][pl_pos]['id'], field, ai_player['frontrow'][ai_pos]['equip_stage'])
+            ai_card, _ = first_card_with_best_true_max_stat_in(ai_player.frontrow, look_facedown_cards=True)
+            pl_card, _ = first_card_with_worst_true_max_stat_in(player.frontrow,
+                                                                look_facedown_cards=always_look_facedown_cards)
 
-                # Lethal
-                if ai_stat - pl_stat >= player['LP']:
-                    actions = Actions([
-                        Action([(encode_backrow_pos(pos), FACE_UP)])
-                    ])
-                # AI has at least as many monsters as the player
-                elif len([filter(None, ai_player['frontrow'])]) \
-                        >= len([filter(lambda x: x is not None and (always_look_facedown_cards or x['face'] == FACE_UP),
-                                      player['frontrow'])]):
-                    # each element of the sorted (in descending order) set of
-                    # true attacks of visible player monsters is less than the
-                    # corresponding element of the similarly sorted set
-                    # of true attacks of AI monsters.
+            # Lethal
+            if ai_card.base_attack_plus_field - pl_card.base_attack_plus_field >= player.lp:
+                actions = Actions([
+                    Action([Action.Description(card.pos, Face.UP)])
+                ])
+                yield actions
+                continue
 
-                    sort_info = {}
-                    for side_key, player_dic in {'ai': ai_player, 'pl': player}.items():
-                        sort_info[side_key] = []
-                        for card in sorted(filter(
-                                    None if player_dic == ai_player
-                                    else lambda x: x is not None and (always_look_facedown_cards or x['face'] == FACE_UP),
-                                    player_dic['frontrow']),
-                                key=lambda card: descending_true_max_stat_sorting_key(cur, card, field)):
-                            sort_info[side_key].append(
-                                calculate_true_max_stat(cur, card['id'], field, card['equip_stage']))
+            # AI must have at least as many monsters as the player has visible monsters
+            if not (
+                len(list(filter(None, ai_player.frontrow)))
+                >= len(list(filter(lambda x: is_faceup(x, always_look_facedown_cards),
+                                   player.frontrow)))
+            ):
+                actions = Actions([
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
+                ])
+                yield actions
+                continue
 
-                    if all([pl_stat < ai_stat for ai_stat, pl_stat in zip(sort_info['ai'], sort_info['pl'])]):
-                        actions = Actions([
-                            Action([(encode_backrow_pos(pos), FACE_UP)])
-                        ])
-                    else:
-                        actions = Actions([
-                            Action([(encode_backrow_pos(pos), DARKEN)])
-                        ])
-                else:
-                    actions = Actions([
-                        Action([(encode_backrow_pos(pos), DARKEN)])
-                    ])
+            # each element of the sorted (in descending order) set of
+            # true attacks of visible player monsters is less than the
+            # corresponding element of the similarly sorted set
+            # of true attacks of AI monsters.
+
+            sort_info = {}
+            for side_key, player_dic in {'ai': ai_player, 'pl': player}.items():
+                sort_info[side_key] = []
+                for monster in sorted(filter(
+                            None if player_dic == ai_player
+                            else lambda x: is_faceup(x, always_look_facedown_cards),
+                            player_dic.frontrow),
+                        key=descending_true_max_stat_sorting_key):
+                    sort_info[side_key].append(monster.true_max_stat)
+
+            if all([ai_stat > pl_stat for ai_stat, pl_stat in zip(sort_info['ai'], sort_info['pl'])]):
+                actions = Actions([
+                    Action([Action.Description(card.pos, Face.UP)])
+                ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), DARKEN)])
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Type counters
         for _type, counter in type_counter_magics.items():
-            while (pos := get_first_pos_in(cur, counter, ai_player['backrow'], only_check_active=True)) \
+            while (card := get_first_card_in(counter, ai_player.backrow, only_check_active=True)) \
                           is not None:
-                if ai_thinks_it_lacks_field_control(cur, player['frontrow'], ai_player['frontrow'], field,
-                                                    always_look_facedown_cards):
-                    player_pos, _ = get_first_pos_of_true_max_stat_in(cur, player['frontrow'], field,
-                                                                      always_look_facedown_cards)
-                    if _type == get_card_type_from_id(cur, player['frontrow'][player_pos]['id']):
+                if ai_thinks_it_lacks_field_control(player.frontrow, ai_player.frontrow,
+                                                    look_facedown_cards=always_look_facedown_cards):
+                    player_card, _ = first_card_with_best_true_max_stat_in(
+                        player.frontrow,
+                        look_facedown_cards=always_look_facedown_cards
+                    )
+                    if _type == player_card.type:
                         actions = Actions([
-                            Action([(encode_backrow_pos(pos), FACE_UP)])
+                            Action([Action.Description(card.pos, Face.UP)])
                         ])
                     else:
                         actions = Actions([
-                            Action([(encode_backrow_pos(pos), DARKEN)])
+                            Action([Action.Description(card.pos, IsActive.DARKEN)])
                         ])
                 else:
                     actions = Actions([
-                        Action([(encode_backrow_pos(pos), DARKEN)])
+                        Action([Action.Description(card.pos, IsActive.DARKEN)])
                     ])
                 yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Decrease stats
         for name in ['Spellbinding Circle', 'Shadow Spell']:
-            while (pos := get_first_pos_in(cur, name, ai_player['backrow'])) \
+            while (card := get_first_card_in(name, ai_player.backrow)) \
                           is not None:
-                if ai_thinks_it_lacks_field_control(cur, player['frontrow'], ai_player['frontrow'], field,
-                                                    always_look_facedown_cards):
+                if ai_thinks_it_lacks_field_control(player.frontrow, ai_player.frontrow,
+                                                    look_facedown_cards=always_look_facedown_cards):
                     actions = Actions([
-                        Action([(encode_backrow_pos(pos), FACE_UP)])
+                        Action([Action.Description(card.pos, Face.UP)])
                     ])
                 else:
                     actions = Actions([
-                        Action([(encode_backrow_pos(pos), DARKEN)])
+                        Action([Action.Description(card.pos, IsActive.DARKEN)])
                     ])
                 yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Crush Card
-        while (pos := get_first_pos_in(cur, 'Crush Card', ai_player['backrow'])) \
+        while (card := get_first_card_in('Crush Card', ai_player.backrow)) \
                       is not None:
-            if ai_thinks_it_lacks_field_control(cur, player['frontrow'], ai_player['frontrow'], field,
-                                                always_look_facedown_cards):
-                player_pos, _ = get_first_pos_of_true_max_stat_in(cur, player['frontrow'], field,
-                                                                  always_look_facedown_cards)
-                # Skips equips
-                player_stat = calculate_max_base_stat_plus_field(cur, player['frontrow'][player_pos]['id'], field)
-                if player_stat >= 1_500:
+            if ai_thinks_it_lacks_field_control(player.frontrow, ai_player.frontrow,
+                                                look_facedown_cards=always_look_facedown_cards):
+                player_card, _ = first_card_with_best_true_max_stat_in(player.frontrow,
+                                                                       look_facedown_cards=always_look_facedown_cards)
+
+                if player_card.base_attack_plus_field >= CRUSH_CARD_MIN_ATTACK:
                     actions = Actions([
-                        Action([(encode_backrow_pos(pos), FACE_UP)])
+                        Action([Action.Description(card.pos, Face.UP)])
                     ])
                 else:
                     actions = Actions([
-                        Action([(encode_backrow_pos(pos), DARKEN)])
+                        Action([Action.Description(card.pos, IsActive.DARKEN)])
                     ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), DARKEN)])
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Raigeki
-        while (pos := get_first_pos_in(cur, 'Raigeki', ai_player['backrow'])) \
+        while (card := get_first_card_in('Raigeki', ai_player.backrow)) \
                       is not None:
-            if ai_thinks_it_lacks_field_control(cur, player['frontrow'], ai_player['frontrow'], field,
-                                                always_look_facedown_cards) \
-                    and len(list(filter(lambda x: x is not None and (always_look_facedown_cards or ['face'] == FACE_UP),
-                                        player['frontrow']))) \
-                    >= len(list(filter(None, ai_player['frontrow']))):
+            if ai_thinks_it_lacks_field_control(player.frontrow, ai_player.frontrow,
+                                                look_facedown_cards=always_look_facedown_cards) \
+                    and len(list(filter(lambda x: is_faceup(x, always_look_facedown_cards),
+                                        player.frontrow))) \
+                    >= len(list(filter(None, ai_player.frontrow))):
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), FACE_UP)])
+                    Action([Action.Description(card.pos, Face.UP)])
                 ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), DARKEN)])
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Fields
-        for new_field in fields_board_ai:
-            while (pos := get_first_pos_in(cur, new_field, ai_player['backrow'])) \
+        for new_field in Field:
+            while (card := get_first_card_in(new_field, ai_player.backrow)) \
                           is not None:
-                if ai_thinks_it_lacks_field_control(cur, player['frontrow'], ai_player['frontrow'], field,
-                                                    always_look_facedown_cards) \
+                if ai_thinks_it_lacks_field_control(player.frontrow, ai_player.frontrow,
+                                                    look_facedown_cards=always_look_facedown_cards) \
                         and field != new_field:
-                    pos_player, _ \
-                        = get_first_pos_of_true_max_stat_in(cur, player['frontrow'], field, always_look_facedown_cards)
-                    type_player = get_card_type_from_id(cur, player['frontrow'][pos_player]['id'])
+                    player_card, _ = first_card_with_best_true_max_stat_in(
+                        player.frontrow,
+                        look_facedown_cards=always_look_facedown_cards
+                    )
 
-                    pos_ai, _ = get_first_pos_of_true_max_stat_in(cur, ai_player['frontrow'], field, True)
-                    type_ai = get_card_type_from_id(cur, ai_player['frontrow'][pos_player]['id']) \
-                        if pos_ai is not None \
-                        else 'Dragon'
+                    ai_card, _ = first_card_with_best_true_max_stat_in(ai_player.frontrow,
+                                                                       look_facedown_cards=True)
+                    type_ai = ai_card.type if ai_card is not None else Type.DRAGON
 
-                    is_player_boosted = is_stat_increased(type_player, field, new_field)
-                    is_player_weakened = is_stat_decreased(type_player, field, new_field)
+                    is_player_boosted = is_stat_increased(player_card.type, field, new_field)
+                    is_player_weakened = is_stat_decreased(player_card.type, field, new_field)
                     is_ai_boosted = is_stat_increased(type_ai, field, new_field)
                     is_ai_weakened = is_stat_decreased(type_ai, field, new_field)
 
                     if not is_player_boosted and not is_ai_weakened and (is_player_weakened or is_ai_boosted):
                         actions = Actions([
-                            Action([(encode_backrow_pos(pos), FACE_UP)])
+                            Action([Action.Description(card.pos, Face.UP)])
                         ])
                     else:
                         actions = Actions([
-                            Action([(encode_backrow_pos(pos), DARKEN)])
+                            Action([Action.Description(card.pos, IsActive.DARKEN)])
                         ])
                 else:
                     actions = Actions([
-                        Action([(encode_backrow_pos(pos), DARKEN)])
+                        Action([Action.Description(card.pos, IsActive.DARKEN)])
                     ])
                 yield actions
 
-    if any(ai_player['backrow']):
+    if any(ai_player.backrow):
         # Dark Hole
-        while (pos := get_first_pos_in(cur, 'Dark Hole', ai_player['backrow'])) \
+        while (card := get_first_card_in('Dark Hole', ai_player.backrow)) \
                       is not None:
-            if ai_thinks_it_lacks_field_control(cur, player['frontrow'], ai_player['frontrow'], field,
-                                                always_look_facedown_cards) \
-                    and len(list(filter(None, player['frontrow']))) > len(list(filter(None, ai_player['frontrow']))):
+            if ai_thinks_it_lacks_field_control(player.frontrow, ai_player.frontrow,
+                                                look_facedown_cards=always_look_facedown_cards) \
+                    and len(list(filter(None, player.frontrow))) > len(list(filter(None, ai_player.frontrow))):
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), FACE_UP)])
+                    Action([Action.Description(card.pos, Face.UP)])
                 ])
             else:
                 actions = Actions([
-                    Action([(encode_backrow_pos(pos), DARKEN)])
+                    Action([Action.Description(card.pos, IsActive.DARKEN)])
                 ])
             yield actions
 
-    if any(ai_player['frontrow']):
+    # Frontrow
+
+    if any(ai_player.frontrow):
         # Forced defend
         for name in forced_defend_monsters:
-            while (pos := get_first_pos_in(cur, name, ai_player['frontrow'], only_check_active=True)) \
+            while (card := get_first_card_in(name, ai_player.frontrow, only_check_active=True)) \
                           is not None:
                 actions = Actions([
-                    Action([(encode_frontrow_pos(pos), DEFENSE)])
+                    Action([Action.Description(card.pos, BattleMode.DEFENSE)])
                 ])
                 yield actions
 
-    if any(ai_player['frontrow']):
+    if any(ai_player.frontrow):
         # Execute defend if under Swords
-        if ai_player['remaining_turns_under_swords'] > 0:
-            while (pos_stat := get_first_pos_of_true_max_stat_in(cur, ai_player['frontrow'], field, True,
-                                                           only_check_active=True)) \
-                               is not None:
-                pos, _ = pos_stat
-                if ai_player['frontrow'][pos]['name'] in skip_defend_monsters:
+        if ai_player.remaining_turns_under_swords > 0:
+            while (card_stat := first_card_with_best_true_max_stat_in(ai_player.frontrow,
+                                                                    look_facedown_cards=True,
+                                                                    only_check_active=True)) \
+                                is not None:
+                card, _ = card_stat
+                if card.name in skip_defend_monsters:
                     actions = Actions([
-                        Action([(encode_frontrow_pos(pos), ATTACK)])
+                        Action([Action.Description(card.pos, BattleMode.ATTACK)])
                     ])
                 else:
                     actions = Actions([
-                        Action([(encode_frontrow_pos(pos), DEFENSE)])
+                        Action([Action.Description(card.pos, BattleMode.DEFENSE)])
                     ])
                 yield actions
         else:
-            while (actions := lbl_next_battle(cur, player, ai_player, field, always_look_facedown_cards)) \
+            while (actions := lbl_next_battle(player, ai_player, always_look_facedown_cards)) \
                              is not None:
                 yield actions
 
-    yield None
+    # End of turn
+    actions = Actions([
+        Action([Action.Description(None, EndOfTurn)])
+    ])
+    yield actions

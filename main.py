@@ -5,38 +5,6 @@ import sqlite3
 ID, NAME, STAR1, STAR2, TYPE, ATTACK, DEFENSE = 0, 1, 3, 4, 6, 8, 9
 
 
-def has_advantage_over(atk_star, def_star):
-    return (atk_star, def_star) in [
-        ('Sun', 'Moon'),
-        ('Moon', 'Venus'),
-        ('Venus', 'Mercury'),
-        ('Mercury', 'Sun'),
-
-        ('Mars', 'Jupiter'),
-        ('Jupiter', 'Saturn'),
-        ('Saturn', 'Uranus'),
-        ('Uranus', 'Pluto'),
-        ('Pluto', 'Neptune'),
-        ('Neptune', 'Mars'),
-    ]
-
-
-def is_boosted(card, field):
-    t = card[TYPE]
-    return field == 'Forest' and t in ['Beast-Warrior', 'Insect', 'Plant', 'Beast'] \
-    or field == 'Wasteland' and t in ['Zombie', 'Dinosaur', 'Rock'] \
-    or field == 'Mountain' and t in ['Dragon', 'Winged-Beast', 'Thunder'] \
-    or field == 'Sogen' and t in ['Beast-Warrior', 'Warrior'] \
-    or field == 'Umi' and t in ['Aqua', 'Thunder'] \
-    or field == 'Yami' and t in ['Fiend', 'Spellcaster']
-
-
-def is_nerfed(card, field):
-    t = card[TYPE]
-    return field == 'Umi' and t in ['Machine', 'Pyro'] \
-    or field == 'Yami' and t in ['Fairy']
-
-
 def seto3_topdecks(NUM_SIMU=1_000):
     duelist = 'Seto 3rd'
     poolType = 'Deck'
@@ -180,11 +148,12 @@ def seto3_topdecks(NUM_SIMU=1_000):
     return BEUD_number_per_turn, nb_useful_samples
 
 
-def heishin2_MM(NUM_SIMU=1_000):
-    duelist = 'Heishin 2nd'
+def heishin_MM(NUM_SIMU=1_000):
+    duelist = 'Heishin'
     odds_to_frontrow_in_control = 0.7
     poolType = 'Deck'
     MM_id = 657
+    DK_id = 342
 
     # player_card = (get_card_from_name(cards, player_cardname), star, mode)  # card, star, 'Attack'/'Defense'
 
@@ -280,9 +249,18 @@ def heishin2_MM(NUM_SIMU=1_000):
         max_stat = -1
         position = None
         first_MM_position = None
+        first_DK_position = None
+        has_2_DK = False
+        already_MM_this_try = False
         for i, id in enumerate(hand_ids):
             if first_MM_position is None and id == MM_id:
                 first_MM_position = i
+
+            if first_DK_position is not None and id == DK_id:
+                has_2_DK = True
+
+            if first_DK_position is None and id == DK_id:
+                first_DK_position = i
 
             enemy_atk = cards[id-1][ATTACK]
             enemy_def = cards[id-1][DEFENSE]
@@ -297,21 +275,139 @@ def heishin2_MM(NUM_SIMU=1_000):
                 max_stat = enemy_def
                 position = i
 
-        if previously_played_id is None or first_MM_position is None:
+        if previously_played_id is None or (first_MM_position is None and not has_2_DK):
             number_of_MM_no_monster += (first_MM_position is not None)
-            number_of_no_MM_monster += (previously_played_id is not None)
+            number_of_no_MM_monster += (previously_played_id is not None and not has_2_DK)
             continue
 
-        number_of_MM_monster += 1
+        # number_of_MM_monster += 1
 
-        if cards[previously_played_id-1][TYPE] == 'Fiend' or first_MM_position < position:
+        if first_MM_position is not None and \
+            (first_MM_position < position or cards[previously_played_id-1][TYPE] in ['Fiend', 'Spellcaster']) \
+        or has_2_DK and (first_DK_position < position or cards[previously_played_id-1][TYPE] in ['Fiend', 'Spellcaster']):
             number_of_MM_combo += 1
 
     return {"number_of_MM_combo": round(odds_to_frontrow_in_control * 10_000 * number_of_MM_combo/NUM_SIMU) / 100,
-            "number_of_MM_monster": round(odds_to_frontrow_in_control * 10_000 * number_of_MM_monster/NUM_SIMU) / 100,
+            # "number_of_MM_monster": round(odds_to_frontrow_in_control * 10_000 * number_of_MM_monster/NUM_SIMU) / 100,
             "number_of_MM_no_monster": round(odds_to_frontrow_in_control * 10_000 * number_of_MM_no_monster/NUM_SIMU) / 100,
             "number_of_no_MM_monster": round(odds_to_frontrow_in_control * 10_000 * number_of_no_MM_monster/NUM_SIMU) / 100,
             }
+
+
+def meadow_mage_swords_backrow(NUM_SIMU=1_000):
+    duelist = 'Meadow Mage'
+    odds_to_backrow_in_control = 0.15
+    poolType = 'Deck'
+    MM_id = 657
+    DK_id = 342
+    swords_ID = 348
+
+    # player_card = (get_card_from_name(cards, player_cardname), star, mode)  # card, star, 'Attack'/'Defense'
+
+    # Pool type id
+    pool_typeID = None
+    for id in cur.execute(
+            f"SELECT DuelistPoolTypeID "
+            f"FROM DuelistPoolTypes "
+            f"WHERE DuelistPoolTypes.DuelistPoolType = \"{poolType}\""
+    ):
+        pool_typeID, = id
+
+    # Hand size
+    hand_size = None
+    for h in cur.execute(
+            f"SELECT HandSize "
+            f"FROM Duelists "
+            f"WHERE Duelists.DuelistName = \"{duelist}\" "
+    ):
+        hand_size, = h
+    # print(hand_size)
+
+    # (cardID, prob) list
+    cards_probs = list(cur.execute(
+        f"SELECT CardID, Prob "
+        f"FROM DuelistPoolSamplingRates "
+        f"LEFT JOIN Duelists ON Duelists.DuelistID = DuelistPoolSamplingRates.DuelistID "
+        f"WHERE DuelistPoolSamplingRates.DuelistPoolTypeID = {pool_typeID} "
+        f"AND Duelists.DuelistName = \"{duelist}\" "
+        f"AND DuelistPoolSamplingRates.Prob > 0 "
+    ))
+
+    CARD_LIMIT = 3
+    CARD_LIMIT_EXODIA = 1
+
+    traps = {k: None for k, in cur.execute(
+        f"SELECT CardID "
+        f"FROM Cards "
+        f"WHERE CardType = 'Trap'"
+    )}
+    equips = {k: None for k, in cur.execute(
+        f"SELECT CardID "
+        f"FROM Cards "
+        f"WHERE CardType = 'Equip'"
+    )}
+    magics = {k: None for k, in cur.execute(
+        f"SELECT CardID "
+        f"FROM Cards "
+        f"WHERE CardType = 'Magic'"
+    )}
+    rituals = {k: None for k, in cur.execute(
+        f"SELECT CardID "
+        f"FROM Cards "
+        f"WHERE CardType = 'Ritual'"
+    )}
+
+    # nb_useful_samples = [0]*20
+    # nb_useful_samples[0] = NUM_SIMU
+    # id 0 is turn 1, etc.
+    # BEUD_number_per_turn = [0]*20
+    swords_in_hand, swords_backrow = 0, 0
+
+    for _ in range(NUM_SIMU):
+        cards_probs_nums = [
+            [id, prob, CARD_LIMIT if id not in range(17, 21 + 1) else CARD_LIMIT_EXODIA] for (id, prob) in cards_probs
+        ]
+
+        # Build Deck
+        DECK_SIZE = 40
+        PROB, NUM = 1, 2
+        deck_ids = []
+        # print(clean_desc(cur.execute("SELECT * FROM Cards").description))
+        for _ in range(DECK_SIZE):
+            chosen, = random.choices(cards_probs_nums, weights=[prob for (_, prob, _) in cards_probs_nums])
+            # print(chosen)
+            deck_ids.append(chosen[0])
+            chosen[NUM] -= 1
+            if chosen[NUM] == 0:
+                chosen[PROB] = 0
+        # print(deck_ids)
+
+        random.shuffle(deck_ids)
+
+        # Draw
+        hand_ids = deck_ids[:hand_size]
+
+        # Choose card to play
+        ## Assumes in control
+        previously_played_id = None
+        max_stat = -1
+        swords_pos = None
+        first_magic_pos = None
+        for i, id_ in enumerate(hand_ids):
+            if id_ == swords_ID:
+                swords_in_hand += 1
+                if swords_pos is None:
+                    swords_pos = i
+            if id_ in magics and first_magic_pos is None:
+                first_magic_pos = i
+
+        if swords_pos is not None and swords_pos == first_magic_pos:
+            swords_backrow += 1
+
+    return {
+        "Swords in hand": round(odds_to_backrow_in_control * 1_000_000 * swords_in_hand/NUM_SIMU) / 10_000,
+        "Swords backrow": round(odds_to_backrow_in_control * 1_000_000 * swords_backrow/NUM_SIMU) / 10_000,
+    }
 
 
 def choose_card_t1(cards_probs, hand_size):  # card, star, 'Attack'/'Defense'
@@ -601,8 +697,8 @@ if __name__ == '__main__':
     for (table_name,) in table_list:
         print(f'{table_name} : {clean_desc(cur.execute(f"SELECT * FROM {table_name}").description)}')
 
-    for row in cur.execute(f"SELECT * FROM Fusions"):
-        print(row)
+    # for row in cur.execute(f"SELECT * FROM Fusions"):
+    #     print(row)
 
     cards = list(cur.execute(
         f"SELECT * "
@@ -630,8 +726,13 @@ if __name__ == '__main__':
     # top_deck = [100*i/n for i, n in zip(top_deck, nb_useful_samples)]
     # print(f"Odds of 1st time seing BEUD : {top_deck}")
 
-    # NUM_SIMU = 1_000_000
-    # MM_data = heishin2_MM(NUM_SIMU=NUM_SIMU)
-    # print(f"{NUM_SIMU} draws | Percent of MM on Heishin 2 : {MM_data}")
+    # NUM_SIMU = 10_000
+    # MM_data = heishin_MM(NUM_SIMU=NUM_SIMU)
+    # print(f"{NUM_SIMU} draws | Percent of ting ting on Heishin : {MM_data}")
+
+    NUM_SIMU = 100_000
+    MM_data = meadow_mage_swords_backrow(NUM_SIMU=NUM_SIMU)
+    print(f"{NUM_SIMU} draws | Swords Meadow Mage : {MM_data}")
+
 
     con.close()
